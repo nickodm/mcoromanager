@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcoromanager"
+dynamic = ["version"]
+readme = "README.md"
+authors = [{"name" = "Nicolás Miranda Colivoro"}]
+license = "MIT"
+
+requires-python = ">=3.10"
+dependencies = [
+    "py7zr==1.1.0",
+    "rich==15.0.0"
+]
+
+[project.scripts]
+mcoromanager = "mcoromanager.main:run"
+
+[project.urls]
+GitHub = "https://github.com/nickodm/mcoromanager"
+
+[tool.hatch.version]
+path = "src/mcoromanager/__init__.py"

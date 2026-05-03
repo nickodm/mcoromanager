@@ -1,0 +1,7 @@
+.venv
+test
+*.7z
+md5.txt
+
+*.egg-info
+__pycache__
