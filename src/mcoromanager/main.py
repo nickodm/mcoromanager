@@ -3,12 +3,11 @@ from subprocess import run as runcmd
 from rich.console import Console
 from rich.prompt import Confirm, Prompt, IntPrompt
 from pathlib import Path
-from py7zr import SevenZipFile
 from io import BytesIO
 import os
 import re
-from . import core
 
+from .core import username
 from . import __version__
 
 TASK_NAME_PATTERN = re.compile(r"^Tarea_\d+$")
@@ -41,7 +40,7 @@ def init_parser():
 
     parser.add_argument("-v", "--version", action='version', version=__version__)
 
-    subparsers = parser.add_subparsers(title="subcommands", required=True, dest="command", help=None)
+    subparsers = parser.add_subparsers(title="subcommands", required=True, dest="command")
     
     #* ----- NEW -----
     cmd_new = subparsers.add_parser("init", help="create folders to do coronado's tasks",
@@ -61,6 +60,18 @@ def init_parser():
                                                 "calculate and save the folder's MD5.")
     cmd_md5.add_argument("-p", "--path", help="the dir's path, defaults to the current working "
                                               "directory", type=Path, default=Path.cwd())
+
+    #* ----- NAME -----
+    cmd_name = subparsers.add_parser("name", help="set, get or delete the name to save files",
+                                     description="Set, get or delete the name to save files.")
+    
+    cmd_name_sub = cmd_name.add_subparsers(title="subcommands", required=True, dest="name_cmd")
+    
+    cmd_name_set = cmd_name_sub.add_parser("set", help="set the user's name")
+    cmd_name_set.add_argument("name", type=str)
+    
+    cmd_name_sub.add_parser("get", help="get the user's name")
+    cmd_name_sub.add_parser("delete", help="delete the user's name")
     
     return parser
 
@@ -159,6 +170,7 @@ def cmd_init(path: Path, start: int, stop: int, git: bool, force: bool) -> int:
     return 1
 
 def cmd_done(path: Path) -> int:
+    from py7zr import SevenZipFile
     from hashlib import md5
     
     if not path.exists() or not path.is_dir():
@@ -179,9 +191,16 @@ def cmd_done(path: Path) -> int:
         printerr("Please, specify a valid number.")
         return 1
     
-    # TODO: This can be added as a setting
-    name: str = Prompt.ask("Please, enter your name [bold blue]as in the required format[/]. "
-                           "[i](For example, nicolasdanilo_mirandacolivoro)[/]")
+    name: str = username.load()
+    
+    if name:
+        print(f"Loaded name [bold blue]{name}[/].")
+    else:
+        name: str = Prompt.ask("Please, enter your name [bold blue]as in the required format[/]. "
+                               "[i](For example, nicolasdanilo_mirandacolivoro)[/]")
+
+        if Confirm.ask("Do you want to save your name for the next time?"):
+            username.save(name)
     
     zip_path: Path = path / f"e{ev_num}_{sub}_{name}.7z".lower()
     
@@ -259,15 +278,34 @@ def main() -> int:
     
     match args.command:
         case "init":
-            return cmd_init(args.path.absolute(), args.start, args.stop, args.git, args.force)
+            return cmd_init(args.path.expanduser().absolute(), args.start, args.stop, args.git, args.force)
         
         case "done":
-            path: Path = args.path.absolute()
+            path: Path = args.path.expanduser().absolute()
             return cmd_done(path)
         
-        case _:
-            parser.print_usage()
-            return 1
+        case "name":
+            match args.name_cmd:
+                case "get":
+                    name = username.load()
+                    
+                    if name is None:
+                        printerr("There isn't a saved user name.")
+                        return 1
+                    
+                    print(f"The user name is: [bold blue]\"{name}\".")
+                    return 0
+                    
+                case "set":
+                    new: str = args.name
+                    username.save(new)
+                    print(CHECK + "The new user name was saved.")
+                    return 0
+                    
+                case "delete":
+                    username.delete()
+                    print(CHECK + "Deleted username.")
+                    return 0
 
 def run() -> int:
     try:
@@ -276,7 +314,7 @@ def run() -> int:
         printerr("Process killed by the user.")
         return 1
     except Exception as e:
-        console.print_exception(e)
+        err.print_exception(e)
         return 1
 
 if __name__ == "__main__":
