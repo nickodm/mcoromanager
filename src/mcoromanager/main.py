@@ -1,16 +1,12 @@
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from subprocess import run as runcmd
 from rich.console import Console
 from rich.prompt import Confirm, Prompt, IntPrompt
 from pathlib import Path
-from io import BytesIO
-import os
-import re
 
-from .core import username
+from .core import *
 from . import __version__
 
-TASK_NAME_PATTERN = re.compile(r"^Tarea_\d+$")
 CHECK: str = ":white_heavy_check_mark:" # Emoji
 
 console = Console()
@@ -30,7 +26,12 @@ subjects: tuple[str] = (
     "DST"       # Desarrollo de Soluciones Tecnológicas
 )
 
-def init_parser():
+
+def init_parser() -> ArgumentParser:
+    """Initialize the argument parser."""
+    def abs_path(p: Path) -> Path:
+        return p.expanduser().absolute()
+    
     parser = ArgumentParser(
         prog="mcoromanager",
         description="A simple program to handle directories created by students "
@@ -52,14 +53,14 @@ def init_parser():
                          help="don't create git repositories for each task")
     cmd_new.add_argument("-f", "--force", action="store_true", help="force the directory creation")
     cmd_new.add_argument("-p", "--path", help="the dir's path, defaults to the current working "
-                                              "directory", type=Path, default=Path.cwd())
+                                              "directory", type=abs_path, default=Path.cwd())
 
     #* ----- DONE -----
     cmd_md5 = subparsers.add_parser("done", help="verify the folder's format and calculate the MD5",
                                     description="Verify the folder's format, zip it to .7z and "
                                                 "calculate and save the folder's MD5.")
     cmd_md5.add_argument("-p", "--path", help="the dir's path, defaults to the current working "
-                                              "directory", type=Path, default=Path.cwd())
+                                              "directory", type=abs_path, default=Path.cwd())
 
     #* ----- NAME -----
     cmd_name = subparsers.add_parser("name", help="set, get or delete the name to save files",
@@ -75,70 +76,6 @@ def init_parser():
     
     return parser
 
-def is_valid_task_name(task_name: str) -> bool:
-    """Whether the task name is valid according to the format required bt the professor.
-
-    :param str task_name:
-    :return bool:
-    """
-    return TASK_NAME_PATTERN.match(task_name) is not None
-
-def is_git_installed() -> bool:
-    """Whether Git is installed in the computer."""
-    try:
-        res = runcmd(['git', '--version'], capture_output=True)
-        return res.returncode == 0
-    except FileNotFoundError:
-        return False
-
-def dir_is_empty(path: Path) -> bool:
-    """Whether the directory at `path` is empty.
-
-    :param Path path:
-    :return bool:
-    """
-    if not path.exists():
-        return True
-    
-    if not path.is_dir():
-        return False
-    
-    for _ in path.iterdir():
-        # If the dir is empty, the loop will no run.
-        return False
-    
-    return True
-
-def new_task_dir(number: int, git: bool, *, parent: Path, force: bool = False) -> int:
-    path = parent / f"Tarea_{number:0>2}"
-    
-    try:
-        path.mkdir()
-    except PermissionError:
-        printerr(f"Error: You don't have permission to create the directory \"{path}\".")
-        return 1
-    except FileExistsError:
-        if not force:
-            printerr(f"Error: The directory \"{path}\" already exists.")
-            return 1
-    except FileNotFoundError:
-        printerr(f"Error: The path \"{path}\" is invalid.")
-        return 1
-    
-    if not git:
-        return 0
-    
-    os.chdir(path)
-    result = runcmd(["git", "init"], capture_output=True)
-    
-    if result.returncode != 0:
-        printerr(f"Failed to create git repository in \"{path.name}\": {result.stderr.decode()}")
-    
-    os.chdir(parent)
-    
-    return result.returncode
-
-
 def cmd_init(path: Path, start: int, stop: int, git: bool, force: bool) -> int:
     if git and not is_git_installed():
         print(":warning: [bold orange]Warning: Git was not found, so the folders will be created "
@@ -152,13 +89,19 @@ def cmd_init(path: Path, start: int, stop: int, git: bool, force: bool) -> int:
     if not path.exists():
         path.mkdir()
 
+    results: list[bool] = []
     with console.status("") as status:
         for i in range(start, stop + 1):
             status.update(f"Creating directory [blue]{i}[/]...")
-            result = new_task_dir(i, git, parent=path, force=force)
+            results.append(new_task_dir(i, git, path, force))
             
-            if result != 0:
-                return result
+            if results[i] != 0:
+                printerr(f"Failed to create directory \"Tarea_{i}\".")
+                continue
+    
+    if results.count(False) >= len(results) / 2:
+        printerr("Failed to create a lot of directories.")
+        return 1
     
     if git:
         connector = "[green]with[/green]"
@@ -167,15 +110,14 @@ def cmd_init(path: Path, start: int, stop: int, git: bool, force: bool) -> int:
     
     print(f"{CHECK} Created directories {connector} git repositories.")
     
-    return 1
+    return 0
 
 def cmd_done(path: Path) -> int:
-    from py7zr import SevenZipFile
-    from hashlib import md5
-    
     if not path.exists() or not path.is_dir():
         printerr(f"The path {path} doesn't exists or isn't a directory.")
         return 1
+    
+    #* ----- FOLDER NAME ------
     
     sub_prompt: Prompt = Prompt("What is the subject?", choices=subjects, case_sensitive=False)
     
@@ -214,51 +156,33 @@ def cmd_done(path: Path) -> int:
         
         print("The file will be overwriten.")
     
-    buffer = BytesIO()
+    #* ----- FORMAT VERIFICATION -----
     
     status = console.status("Verifying format...")
     status.start()
     
     for p in path.iterdir():
-        status.start()
         if not p.is_dir() or is_valid_task_name(p.name):
             continue
         
-        printerr(f"Error: The folder \"{p.name}\" does not follow the required format.")
+        printerr(f"Error: \"{p.name}\" doesn't follow the required format.")
         
         status.stop()
         if not Confirm.ask("Continue?"):
             return 1
+        status.start()
     
     print(CHECK + " Format verified.")
     
+    #* ----- COMPRESSING & MD5 -----
+    
     status.update("Compressing to 7z...")
-    
-    with SevenZipFile(buffer, mode="w") as zipfile:
-        for item in path.iterdir():
-            if item in {zip_path, path / "md5.txt"}:
-                print(f":warning: [yellow] \"{item.name}\" was ommited in the compressed file.")
-                continue
-            
-            if item.is_dir():
-                zipfile.writeall(item, zip_path.stem + "/" + item.stem)
-            else:
-                zipfile.write(item, zip_path.stem + "/" + item.name)
-    
-    status.update(f"Saving to \"{zip_path.name}\"...")
-    
-    buffer.seek(0)
-    with open(zip_path, "wb") as fp:
-        fp.write(buffer.read())
+    szip = compress_7z(path, zip_path.stem)
     
     status.update("Calculating the MD5...")
+    code: str = calculate_md5(szip)
     
-    buffer.seek(0)
-    
-    code: str = md5(buffer.read()).hexdigest()
-    
-    print(f"Your MD5 is: [bold blue]{code}[/].", end="")
-    console.file.flush()
+    print(f"Your MD5 is: [bold blue]{code}[/].")
     
     status.update("Saving the MD5...")
     with open(path / "md5.txt", "w") as fp:
@@ -266,10 +190,46 @@ def cmd_done(path: Path) -> int:
     
     print('MD5 saved to: "md5.txt".')
     
-    status.stop()
+    status.update(f"Saving the 7z...")
+    with open(zip_path, "wb") as fp:
+        fp.write(szip)
     
+    #* ----- DONE -----
+    
+    status.stop()
     console.bell()
+    
     print(CHECK + " [bold green]Done.")
+    return 0
+
+def cmd_name(args: Namespace) -> int:
+    """Handle the "new" command.
+
+    :param Namespace args: 
+    :return int: Exit code
+    """
+    match args.name_cmd:
+        case "get":
+            name = username.load()
+            
+            if name is None:
+                printerr("There isn't a saved user name.")
+                return 1
+            
+            print(f"The user name is: [bold blue]\"{name}\".")
+            return 0
+            
+        case "set":
+            new: str = args.name
+            username.save(new)
+            print(CHECK + "The new user name was saved.")
+            return 0
+            
+        case "delete":
+            username.delete()
+            print(CHECK + "Deleted username.")
+            return 0
+
     return 0
 
 def main() -> int:
@@ -278,34 +238,15 @@ def main() -> int:
     
     match args.command:
         case "init":
-            return cmd_init(args.path.expanduser().absolute(), args.start, args.stop, args.git, args.force)
+            return cmd_init(args.path, args.start, args.stop, args.git, args.force)
         
         case "done":
-            path: Path = args.path.expanduser().absolute()
-            return cmd_done(path)
+            return cmd_done(args.path)
         
         case "name":
-            match args.name_cmd:
-                case "get":
-                    name = username.load()
-                    
-                    if name is None:
-                        printerr("There isn't a saved user name.")
-                        return 1
-                    
-                    print(f"The user name is: [bold blue]\"{name}\".")
-                    return 0
-                    
-                case "set":
-                    new: str = args.name
-                    username.save(new)
-                    print(CHECK + "The new user name was saved.")
-                    return 0
-                    
-                case "delete":
-                    username.delete()
-                    print(CHECK + "Deleted username.")
-                    return 0
+            return cmd_name(args)
+    
+    return 0
 
 def run() -> int:
     try:
@@ -313,8 +254,8 @@ def run() -> int:
     except KeyboardInterrupt:
         printerr("Process killed by the user.")
         return 1
-    except Exception as e:
-        err.print_exception(e)
+    except:
+        err.print_exception()
         return 1
 
 if __name__ == "__main__":
