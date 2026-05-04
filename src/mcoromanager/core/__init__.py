@@ -4,11 +4,21 @@ from pathlib import Path
 from hashlib import md5
 from subprocess import run as runcmd
 from re import compile
+from rich.console import Console
 
-__all__ = ("username", "compress_7z", "calculate_md5", "new_task_dir", "dir_is_empty",
-           "is_valid_task_name", "is_git_installed")
+__all__ = ["username", "compress_7z", "calculate_md5", "new_task_dir", "dir_is_empty",
+           "is_valid_task_name", "is_git_installed", "console", "print", "printerr", "CHECK",
+           "err"]
 
 from . import username
+
+CHECK: str = ":white_heavy_check_mark:" # Emoji
+
+console = Console()
+print = console.print
+
+err = Console(stderr=True, style="bold red")
+printerr = err.print
 
 TASK_NAME_PATTERN = compile(r"^Tarea_[1-9]+\d*$")
 
