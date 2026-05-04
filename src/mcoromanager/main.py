@@ -254,7 +254,7 @@ def run() -> int:
     except KeyboardInterrupt:
         printerr("Process killed by the user.")
         return 1
-    except:
+    except Exception:
         err.print_exception()
         return 1
 
